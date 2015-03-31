@@ -35,8 +35,9 @@
 #' # a database that you can write to
 #'
 #' if (!has_lahman("postgres") && has_lahman("mysql")) {
+#' lahman_m <- lahman_mysql()
 #' # Methods -------------------------------------------------------------------
-#' batting <- tbl(lahman_mysql(), "Batting")
+#' batting <- tbl(lahman_m, "Batting")
 #' dim(batting)
 #' colnames(batting)
 #' head(batting)
@@ -71,10 +72,10 @@
 #' summarise(stints, max(stints))
 #'
 #' # Joins ---------------------------------------------------------------------
-#' player_info <- select(tbl(lahman_mysql(), "Master"), playerID, hofID,
+#' player_info <- select(tbl(lahman_m, "Master"), playerID,
 #'   birthYear)
-#' hof <- select(filter(tbl(lahman_mysql(), "HallOfFame"), inducted == "Y"),
-#'  hofID, votedBy, category)
+#' hof <- select(filter(tbl(lahman_m, "HallOfFame"), inducted == "Y"),
+#'  playerID, votedBy, category)
 #'
 #' # Match players and their hall of fame data
 #' inner_join(player_info, hof)
@@ -87,17 +88,17 @@
 #'
 #' # Arbitrary SQL -------------------------------------------------------------
 #' # You can also provide sql as is, using the sql function:
-#' batting2008 <- tbl(lahman_mysql(),
+#' batting2008 <- tbl(lahman_m,
 #'   sql("SELECT * FROM Batting WHERE YearID = 2008"))
 #' batting2008
 #' }
 src_mysql <- function(dbname, host = NULL, port = 0L, user = "root",
                       password = "", ...) {
-  if (!require("RMySQL")) {
+  if (!requireNamespace("RMySQL", quietly = TRUE)) {
     stop("RMySQL package required to connect to mysql/mariadb", call. = FALSE)
   }
 
-  con <- dbConnect(MySQL(), dbname = dbname , host = host, port = port,
+  con <- dbConnect(RMySQL::MySQL(), dbname = dbname , host = host, port = port,
     username = user, password = password, ...)
   info <- dbGetInfo(con)
 
@@ -112,7 +113,7 @@ tbl.src_mysql <- function(src, from, ...) {
 }
 
 #' @export
-brief_desc.src_mysql <- function(x) {
+src_desc.src_mysql <- function(x) {
   info <- x$info
 
   paste0("mysql ", info$serverVersion, " [", info$user, "@",
@@ -120,7 +121,7 @@ brief_desc.src_mysql <- function(x) {
 }
 
 #' @export
-translate_env.src_mysql <- function(x) {
+src_translate_env.src_mysql <- function(x) {
   sql_variant(
     base_scalar,
     sql_translator(.parent = base_agg,

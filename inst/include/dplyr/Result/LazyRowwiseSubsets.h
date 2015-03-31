@@ -35,6 +35,9 @@ namespace dplyr {
         
         SEXP get_variable( SEXP symbol ) const {
             RowwiseSubsetMap::const_iterator it = subset_map.find( symbol );
+            if( it == subset_map.end() ){
+                stop( "variable '%s' not found in the dataset", CHAR(PRINTNAME(symbol)) ) ;
+            }
             return it->second->get_variable() ;  
         }
         bool is_summary( SEXP symbol ) const {

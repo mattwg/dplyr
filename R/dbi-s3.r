@@ -1,6 +1,24 @@
 #' @import DBI
 NULL
 
+
+#' Source generics.
+#'
+#' These generics retrieve metadata for a given src.
+#'
+#' @keywords internal
+#' @name backend_src
+NULL
+
+#' @name backend_src
+#' @export
+src_desc <- function(x) UseMethod("src_desc")
+
+#' @name backend_src
+#' @export
+src_translate_env <- function(x) UseMethod("src_translate_env")
+
+
 #' Database generics.
 #'
 #' These generics execute actions on the database. All generics have a method
@@ -64,7 +82,7 @@ db_save_query.DBIConnection <- function(con, sql, name, temporary = TRUE,
 db_begin <- function(con, ...) UseMethod("db_begin")
 #' @export
 db_begin.DBIConnection <- function(con, ...) {
-  dbGetQuery(con, "BEGIN TRANSACTION")
+  dbBegin(con)
 }
 
 #' @name backend_db
@@ -166,7 +184,7 @@ db_explain <- function(con, sql, ...) {
 #' SQL generation.
 #'
 #' These generics are used to run build various SQL queries.  Default methods
-#' are provided for \code{DBIConnectdion}, but variations in SQL across
+#' are provided for \code{DBIConnection}, but variations in SQL across
 #' databases means that it's likely that a backend will require at least a
 #' few methods.
 #'
@@ -248,6 +266,7 @@ sql_subquery.DBIConnection <- function(con, sql, name = unique_name(), ...) {
 }
 
 #' @rdname backend_sql
+#' @export
 sql_join <- function(con, x, y, type = "inner", by = NULL, ...) {
   UseMethod("sql_join")
 }
@@ -261,20 +280,13 @@ sql_join.DBIConnection <- function(con, x, y, type = "inner", by = NULL, ...) {
     stop("Unknown join type:", type, call. = FALSE)
   )
 
-  by <- by %||% common_by(x, y)
-  if (!is.null(names(by))) {
-    by_x <- names(by)
-    by_y <- unname(by)
-  } else {
-    by_x <- by
-    by_y <- by
-  }
-  using <- all(by_x == by_y)
+  by <- common_by(by, x, y)
+  using <- all(by$x == by$y)
 
   # Ensure tables have unique names
   x_names <- auto_names(x$select)
   y_names <- auto_names(y$select)
-  uniques <- unique_names(x_names, y_names, by_x[by_x == by_y])
+  uniques <- unique_names(x_names, y_names, by$x[by$x == by$y])
 
   if (is.null(uniques)) {
     sel_vars <- c(x_names, y_names)
@@ -282,21 +294,22 @@ sql_join.DBIConnection <- function(con, x, y, type = "inner", by = NULL, ...) {
     x <- update(x, select = setNames(x$select, uniques$x))
     y <- update(y, select = setNames(y$select, uniques$y))
 
-    by_x <- unname(uniques$x[by_x])
-    by_y <- unname(uniques$y[by_y])
+    by$x <- unname(uniques$x[by$x])
+    by$y <- unname(uniques$y[by$y])
 
     sel_vars <- unique(c(uniques$x, uniques$y))
   }
 
   if (using) {
-    cond <- build_sql("USING ", lapply(by_x, ident), con = con)
+    cond <- build_sql("USING ", lapply(by$x, ident), con = con)
   } else {
-    on <- sql_vector(paste0(sql_escape_ident(con, by_x), " = ", sql_escape_ident(con, by_y)),
+    on <- sql_vector(paste0(sql_escape_ident(con, by$x), " = ", sql_escape_ident(con, by$y)),
       collapse = " AND ", parens = TRUE)
     cond <- build_sql("ON ", on, con = con)
   }
 
   from <- build_sql(
+    'SELECT * FROM ',
     sql_subquery(con, x$query$sql), "\n\n",
     join, " JOIN \n\n" ,
     sql_subquery(con, y$query$sql), "\n\n",
@@ -314,19 +327,12 @@ sql_semi_join <- function(con, x, y, anti = FALSE, by = NULL, ...) {
 }
 #' @export
 sql_semi_join.DBIConnection <- function(con, x, y, anti = FALSE, by = NULL, ...) {
-  by <- by %||% common_by(x, y)
-  if (!is.null(names(by))) {
-    by_x <- names(by)
-    by_y <- unname(by)
-  } else {
-    by_x <- by
-    by_y <- by
-  }
+  by <- common_by(by, x, y)
 
   left <- escape(ident("_LEFT"), con = con)
   right <- escape(ident("_RIGHT"), con = con)
   on <- sql_vector(paste0(
-    left, ".", sql_escape_ident(con, by_x), " = ", right, ".", sql_escape_ident(con, by_y)),
+    left, ".", sql_escape_ident(con, by$x), " = ", right, ".", sql_escape_ident(con, by$y)),
     collapse = " AND ", parens = TRUE)
 
   from <- build_sql(
@@ -390,6 +396,15 @@ db_query_fields.DBIConnection <- function(con, sql, ...) {
   qry <- dbSendQuery(con, fields)
   on.exit(dbClearResult(qry))
 
+  dbListFields(qry)
+}
+#' @export
+db_query_fields.PostgreSQLConnection <- function(con, sql, ...) {
+  fields <- build_sql("SELECT * FROM ", sql, " WHERE 0=1", con = con)
+
+  qry <- dbSendQuery(con, fields)
+  on.exit(dbClearResult(qry))
+
   dbGetInfo(qry)$fieldDescription[[1]]$name
 }
 
@@ -401,7 +416,7 @@ db_query_rows <- function(con, sql, ...) {
 #' @export
 db_query_rows.DBIConnection <- function(con, sql, ...) {
   from <- sql_subquery(con, sql, "master")
-  rows <- build_sql("SELECT count(*) FROM ", from, con = self$con)
+  rows <- build_sql("SELECT count(*) FROM ", from, con = con)
 
   as.integer(dbGetQuery(con, rows)[[1]])
 }

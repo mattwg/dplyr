@@ -4,6 +4,8 @@
 #' @param .data A tbl. All main verbs are S3 generics and provide methods
 #'   for \code{\link{tbl_df}}, \code{\link{tbl_dt}} and \code{\link{tbl_sql}}.
 #' @param ... Logical predicates. Multiple conditions are combined with \code{&}.
+#' @param .dots Used to work around non-standard evaluation. See
+#'   \code{vignette("nse")} for details.
 #' @return An object of the same class as \code{.data}.
 #'
 #'   Data frame row names are silently dropped. To preserve, convert to an
@@ -12,14 +14,27 @@
 #' @examples
 #' filter(mtcars, cyl == 8)
 #' filter(mtcars, cyl < 6)
-filter <- function(.data, ...) UseMethod("filter")
+filter <- function(.data, ...) {
+  filter_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @export
+#' @rdname filter
+filter_ <- function(.data, ..., .dots) {
+  UseMethod("filter_")
+}
 
 #' Select rows by position.
+#'
+#' Slice does not work with relational databases because they have no
+#' intrinsic notion of row order. If you want to perform the equivalent
+#' operation, use \code{\link{filter}()} and \code{\link{row_number}()}.
 #'
 #' @family single table verbs
 #' @param .data A tbl. All main verbs are S3 generics and provide methods
 #'   for \code{\link{tbl_df}}, \code{\link{tbl_dt}} and \code{\link{tbl_sql}}.
 #' @param ... Integer row values
+#' @inheritParams filter
 #' @export
 #' @examples
 #' slice(mtcars, 1L)
@@ -28,10 +43,30 @@ filter <- function(.data, ...) UseMethod("filter")
 #'
 #' by_cyl <- group_by(mtcars, cyl)
 #' slice(by_cyl, 1:2)
-slice <- function(.data, ...) UseMethod("slice")
+#'
+#' # Equivalent code using filter that will also work with databases,
+#' # but won't be as fast for in-memory data. For many databases, you'll
+#' # need to supply an explicit variable to use to compute the row number.
+#' filter(mtcars, row_number() == 1L)
+#' filter(mtcars, row_number() == n())
+#' filter(mtcars, between(row_number(), 5, n()))
+slice <- function(.data, ...) {
+  slice_(.data, .dots = lazyeval::lazy_dots(...))
+}
 
+#' @export
+#' @rdname slice
+slice_ <- function(.data, ..., .dots) {
+  UseMethod("slice_")
+}
 
 #' Summarise multiple values to a single value.
+#'
+#' @section Backend variations:
+#'
+#' Data frames are the only backend that supports creating a variable and
+#' using it in the same summary. See examples for more details.
+#' you create
 #'
 #' @export
 #' @inheritParams filter
@@ -46,13 +81,39 @@ slice <- function(.data, ...) UseMethod("slice")
 #' @examples
 #' summarise(mtcars, mean(disp))
 #' summarise(group_by(mtcars, cyl), mean(disp))
-#'
 #' summarise(group_by(mtcars, cyl), m = mean(disp), sd = sd(disp))
-summarise <- function(.data, ...) UseMethod("summarise")
+#'
+#' # With data frames, you can create and immediately use summaries
+#' by_cyl <- mtcars %>% group_by(cyl)
+#' by_cyl %>% summarise(a = n(), b = a + 1)
+#'
+#' \dontrun{
+#' # You can't with data tables or databases
+#' by_cyl_dt <- mtcars %>% tbl_dt() %>% group_by(cyl)
+#' by_cyl_dt %>% summarise(a = n(), b = a + 1)
+#'
+#' by_cyl_db <- src_sqlite(":memory:", create = TRUE) %>%
+#'   copy_to(mtcars) %>% group_by(cyl)
+#' by_cyl_db %>% summarise(a = n(), b = a + 1)
+#' }
+summarise <- function(.data, ...) {
+  summarise_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @export
+#' @rdname summarise
+summarise_ <- function(.data, ..., .dots) {
+  UseMethod("summarise_")
+}
 
 #' @rdname summarise
 #' @export
 summarize <- summarise
+
+#' @rdname summarise
+#' @export
+summarize_ <- summarise_
+
 
 #' Add new variables.
 #'
@@ -73,17 +134,35 @@ summarize <- summarise
 #' transmute(mtcars, displ_l = disp / 61.0237)
 #'
 #' mutate(mtcars, cyl = NULL)
-mutate <- function(.data, ...) UseMethod("mutate")
+mutate <- function(.data, ...) {
+  mutate_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @export
+#' @rdname mutate
+mutate_ <- function(.data, ..., .dots) {
+  UseMethod("mutate_")
+}
 
 #' @rdname mutate
 #' @export
-transmute <- function(.data, ...) UseMethod("transmute")
+transmute <- function(.data, ...) {
+  transmute_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @rdname mutate
+#' @export
+transmute_ <- function(.data, ..., .dots) {
+  UseMethod("transmute_")
+}
+
 
 #' @export
-transmute.default <- function(.data, ...) {
-  out <- mutate(.data, ...)
+transmute_.default <- function(.data, ..., .dots) {
+  dots <- lazyeval::all_dots(.dots, ..., all_named = TRUE)
+  out <- mutate_(.data, .dots = dots)
 
-  keep <- names(dots(...))
+  keep <- names(dots)
   select(out, one_of(keep))
 }
 
@@ -109,7 +188,15 @@ transmute.default <- function(.data, ...) {
 #' @examples
 #' arrange(mtcars, cyl, disp)
 #' arrange(mtcars, desc(disp))
-arrange <- function(.data, ...) UseMethod("arrange")
+arrange <- function(.data, ...) {
+  arrange_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @export
+#' @rdname arrange
+arrange_ <- function(.data, ..., .dots) {
+  UseMethod("arrange_")
+}
 
 #' Select/rename variables by name.
 #'
@@ -133,19 +220,19 @@ arrange <- function(.data, ...) UseMethod("arrange")
 #'    selects all variables (numerically) from x01 to x05.
 #'  \item \code{one_of("x", "y", "z")}:
 #'    selects variables provided in a character vector.
+#'  \item \code{everything()}:
+#'    selects all variables.
 #' }
 #'
 #' To drop variables, use \code{-}. You can rename variables with
 #' named arguments.
 #'
 #' @inheritParams filter
-#' @param ...,args Comma separated list of unquoted expressions. You can treat
+#' @param ... Comma separated list of unquoted expressions. You can treat
 #'   variable names like they are positions. Use positive values to select
 #'   variables; use negative values to drop variables.
-#'
-#'   Use \code{select_()} and \code{args} to do standard evaluation.
-#'   You can supply a list of formulas, calls or names, or a character
-#'   vector.
+#' @param .dots Use \code{select_()} to do standard evaluation. See
+#'   \code{vignette("nse")} for details
 #' @return An object of the same class as \code{.data}.
 #'
 #'   Data frame row names are silently dropped. To preserve, convert to an
@@ -177,27 +264,39 @@ arrange <- function(.data, ...) UseMethod("arrange")
 #' # Rename variables:
 #' # * select() keeps only the variables you specify
 #' select(iris, petal_length = Petal.Length)
+#' # Renaming multiple variables uses a prefix:
+#' select(iris, petal = starts_with("Petal"))
+#'
 #' # * rename() keeps all variables
 #' rename(iris, petal_length = Petal.Length)
 #'
 #' # Programming with select ---------------------------------------------------
 #' select_(iris, ~Petal.Length)
-#' select_(iris, list(quote(-Petal.Length), quote(-Petal.Width)))
-#' select_(iris, c("Petal.Length"))
-#' select_(iris, substitute(matches(x), list(x = ".t.")))
+#' select_(iris, "Petal.Length")
+#' select_(iris, lazyeval::interp(~matches(x), x = ".t."))
+#' select_(iris, quote(-Petal.Length), quote(-Petal.Width))
+#' select_(iris, .dots = list(quote(-Petal.Length), quote(-Petal.Width)))
 select <- function(.data, ...) {
-  select_(.data, lazy::lazy_dots(...))
+  select_(.data, .dots = lazyeval::lazy_dots(...))
 }
 
 #' @export
 #' @rdname select
-select_ <- function(.data, args) {
+select_ <- function(.data, ..., .dots) {
   UseMethod("select_")
 }
 
 #' @rdname select
 #' @export
-rename <- function(.data, ...) UseMethod("rename")
+rename <- function(.data, ...) {
+  rename_(.data, .dots = lazyeval::lazy_dots(...))
+}
+
+#' @rdname select
+#' @export
+rename_ <- function(.data, ..., .dots) {
+  UseMethod("rename_")
+}
 
 #' The number of observations in the current group.
 #'

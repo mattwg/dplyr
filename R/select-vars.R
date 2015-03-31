@@ -1,8 +1,6 @@
 #' Select variables.
 #'
-#' \code{select()} implements a rich set of tools for including (and excluding)
-#' variables. \code{rename()} is simpler, but always includes all variables in
-#' the original order: you can only change their names, not their positions.
+#' These functions power \code{\link{select}()} and \code{\link{rename}()}.
 #'
 #' @param vars A character vector of existing column names.
 #' @param ...,args Expressions to compute. \code{select_vars} and
@@ -15,6 +13,7 @@
 #'   names are new names.
 #' @examples
 #' # Keep variables
+#' select_vars(names(iris), everything())
 #' select_vars(names(iris), starts_with("Petal"))
 #' select_vars(names(iris), ends_with("Width"))
 #' select_vars(names(iris), contains("etal"))
@@ -45,24 +44,21 @@
 #' select_vars_(names(iris), list(~Petal.Length))
 #' select_vars_(names(iris), list(quote(Petal.Length)))
 #' select_vars_(names(iris), "Petal.Length")
-select_vars <- function(vars, ..., env = parent.frame(),
-                        include = character(), exclude = character()) {
-
-  args <- lazy::lazy_dots(...)
+select_vars <- function(vars, ..., include = character(), exclude = character()) {
+  args <- lazyeval::lazy_dots(...)
   select_vars_(vars, args, include = include, exclude = exclude)
 }
 
 #' @rdname select_vars
 #' @export
-select_vars_ <- function(vars, args, env = parent.frame(),
-                          include = character(), exclude = character()) {
+select_vars_ <- function(vars, args, include = character(), exclude = character()) {
 
   if (length(args) == 0) {
     vars <- setdiff(include, exclude)
     return(setNames(vars, vars))
   }
 
-  args <- lazy::as.lazy_dots(args, env = env)
+  args <- lazyeval::as.lazy_dots(args)
 
   # No non-standard evaluation - but all names mapped to their position.
   # Keep integer semantics: include = +, exclude = -
@@ -74,31 +70,25 @@ select_vars_ <- function(vars, args, env = parent.frame(),
     contains = function(...) contains(vars, ...),
     matches = function(...) matches(vars, ...),
     num_range = function(...) num_range(vars, ...),
-    one_of = function(...) one_of(vars, ...)
+    one_of = function(...) one_of(vars, ...),
+    everything = function(...) everything(vars, ...)
   )
 
-  ind_list <- lazy::lazy_eval(args, c(names_list, select_funs))
+  ind_list <- lazyeval::lazy_eval(args, c(names_list, select_funs))
   names(ind_list) <- names2(args)
 
-  ind <- unlist(ind_list)
-  incl <- ind[ind > 0]
+  is_numeric <- vapply(ind_list, is.numeric, logical(1))
+  if (any(!is_numeric)) {
+    bad_inputs <- lapply(args[!is_numeric], `[[`, "expr")
+    labels <- vapply(bad_inputs, deparse_trunc, character(1))
 
-  # If only negative values, implicitly assumes all variables to be removed.
-  if (sum(ind > 0) == 0 && sum(ind < 0) > 0) {
-    incl <- seq_along(vars)
-  }
-  # Remove duplicates (unique loses names)
-  incl <- incl[!duplicated(incl)]
-
-  # Remove variables to be excluded (setdiff loses names)
-  excl <- abs(ind[ind < 0])
-  incl <- incl[match(incl, excl, 0L) == 0L]
-
-  bad_idx <- incl < 0 | incl > length(vars)
-  if (any(bad_idx)) {
-    stop("Bad indices: ", paste0(which(bad_idx), collapse = ", "),
+    stop("All select() inputs must resolve to integer column positions.\n",
+      "The following do not:\n", paste("* ", labels, collapse = "\n"),
       call. = FALSE)
   }
+
+  incl <- combine_vars(vars, ind_list)
+
   # Include/exclude specified variables
   sel <- setNames(vars[incl], names(incl))
   sel <- c(setdiff2(include, sel), sel)
@@ -124,17 +114,17 @@ setdiff2 <- function(x, y) {
 #' @export
 #' @rdname select_vars
 rename_vars <- function(vars, ...) {
-  rename_vars_(vars, lazy::lazy_dots(...))
+  rename_vars_(vars, lazyeval::lazy_dots(...))
 }
 
 #' @export
 #' @rdname select_vars
-rename_vars_ <- function(vars, args, env = parent.frame()) {
+rename_vars_ <- function(vars, args) {
   if (any(names2(args) == "")) {
-    stop("All arguments to rename must be named.", stop = FALSE)
+    stop("All arguments to rename must be named.", call. = FALSE)
   }
 
-  args <- lazy::as.lazy_dots(args, env = env)
+  args <- lazyeval::as.lazy_dots(args)
   is_name <- vapply(args, function(x) is.name(x$expr), logical(1))
   if (!all(is_name)) {
     stop("Arguments to rename must be unquoted variable names. ",

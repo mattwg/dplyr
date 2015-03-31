@@ -23,7 +23,11 @@ ends_with <- function(vars, match, ignore.case = TRUE) {
 contains <- function(vars, match, ignore.case = TRUE) {
   stopifnot(is.string(match), nchar(match) > 0)
 
-  grep(match, vars, ignore.case = ignore.case)
+  if (ignore.case) {
+    vars <- tolower(vars)
+    match <- tolower(match)
+  }
+  grep(match, vars, fixed = TRUE)
 }
 
 matches <- function(vars, match, ignore.case = TRUE) {
@@ -43,4 +47,8 @@ one_of <- function(vars, ...) {
   keep <- c(...)
   stopifnot(is.character(keep))
   match(keep, vars)
+}
+
+everything <- function(vars) {
+  seq_along(vars)
 }

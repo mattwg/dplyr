@@ -16,10 +16,10 @@ List rbind__impl( Dots dots ){
     int k=0 ;
     for( int i=0; i<ndata; i++){
         Rcpp::checkUserInterrupt() ;
-        
+
         DataFrame df = dots[i] ;
-        if( !df.size() || !Rf_length(df[0]) ) continue ;
-            
+        if( !df.size() ) continue ;
+
         DataFrameVisitors visitors( df, df.names() ) ;
         int nrows = df.nrows() ;
 
@@ -41,7 +41,7 @@ List rbind__impl( Dots dots ){
                 columns.push_back( coll );
                 names.push_back(name) ;
             }
-            
+
             if( coll->compatible(source) ){
                 // if the current source is compatible, collect
                 coll->collect( SlicingIndex( k, nrows), source ) ;
@@ -60,23 +60,19 @@ List rbind__impl( Dots dots ){
                 delete coll ;
                 columns[index] = new_collecter ;
 
+            } else if( all_na(source) ) {
+                // do nothing, the collecter already initialized data with the
+                // right NA
+            } else if( coll->is_logical_all_na()  ) {
+                Collecter* new_collecter = collecter( source, n ) ;
+                new_collecter->collect( SlicingIndex(k, nrows), source ) ;
+                delete coll ;
+                columns[index] = new_collecter ;
             } else {
-                std::stringstream msg ;
                 std::string column_name(name) ;
-                msg << "incompatible type ("
-                    << "data index: "
-                    << (i+1)
-                    << ", column: '"
-                    << column_name
-                    << "', was collecting: "
-                    << coll->describe()
-                    << " ("
-                    << DEMANGLE(*coll)
-                    << ")"
-                    << ", incompatible with data of type: "
-                    << get_single_class(source) ;
+                stop( "incompatible type (data index: %d, column: '%s', was collecting: %s (%s), incompatible with data of type: %s",
+                    (i+1), column_name, coll->describe(), DEMANGLE(*coll), get_single_class(source) );
 
-                stop( msg.str() ) ;
             }
 
         }
@@ -94,13 +90,13 @@ List rbind__impl( Dots dots ){
     out.attr( "names" ) = out_names ;
     delete_all( columns ) ;
     set_rownames( out, n );
-    out.attr( "class" ) = "data.frame" ;
+    out.attr( "class" ) = classes_not_grouped() ;
 
     return out ;
 }
 
 //' @export
-//' @rdname rbind
+//' @rdname bind
 // [[Rcpp::export]]
 List rbind_all( StrictListOf<DataFrame, NULL_or_Is<DataFrame> > dots ){
     return rbind__impl(dots) ;
@@ -114,7 +110,7 @@ List rbind_list__impl( DotsOf<DataFrame> dots ){
 template <typename Dots>
 List cbind__impl( Dots dots ){
   int n = dots.size() ;
-  
+
   // first check that the number of rows is the same
   DataFrame df = dots[0] ;
   int nrows = df.nrows() ;
@@ -123,24 +119,19 @@ List cbind__impl( Dots dots ){
     DataFrame current = dots[i] ;
     if( current.nrows() != nrows ){
       std::stringstream ss ;
-      ss << "incompatible number of rows (" 
-         << current.size()
-         << ", expecting "
-         << nrows 
-      ;
-      stop( ss.str() ) ;
+      stop( "incompatible number of rows (%d, expecting %d)", current.nrows(), nrows ) ;
     }
     nv += current.size() ;
   }
-  
+
   // collect columns
   List out(nv) ;
   CharacterVector out_names(nv) ;
-  
+
   // then do the subsequent dfs
   for( int i=0, k=0 ; i<n; i++){
       Rcpp::checkUserInterrupt() ;
-    
+
       DataFrame current = dots[i] ;
       CharacterVector current_names = current.names() ;
       int nc = current.size() ;
@@ -156,12 +147,46 @@ List cbind__impl( Dots dots ){
 }
 
 // [[Rcpp::export]]
-List cbind_list__impl( DotsOf<DataFrame> dots ){
-  return cbind__impl( dots ) ;  
+List cbind_all( StrictListOf<DataFrame, NULL_or_Is<DataFrame> > dots ){
+    return cbind__impl( dots ) ;
 }
 
 // [[Rcpp::export]]
-List cbind_all( StrictListOf<DataFrame, NULL_or_Is<DataFrame> > dots ){
-    return cbind__impl( dots ) ;  
+SEXP combine_all( List data ){
+    int nv = data.size() ;
+    if( nv == 0 ) stop("combine_all needs at least one vector") ;
+
+    // get the size of the output
+    int n = 0 ;
+    for( int i=0; i<nv; i++){
+        n += Rf_length(data[i]) ;
+    }
+
+    // collect
+    Collecter* coll = collecter( data[0], n ) ;
+    coll->collect( SlicingIndex(0, Rf_length(data[0])), data[0] ) ;
+    int k = Rf_length(data[0]) ;
+
+    for( int i=1; i<nv; i++){
+        SEXP current = data[i] ;
+        int n_current= Rf_length(current) ;
+        if( coll->compatible(current) ){
+            coll->collect( SlicingIndex(k, n_current), current ) ;
+        } else if( coll->can_promote(current) ) {
+            Collecter* new_coll = promote_collecter(current, n, coll) ;
+            new_coll->collect( SlicingIndex(k, n_current), current ) ;
+            new_coll->collect( SlicingIndex(0, k), coll->get() ) ;
+            delete coll ;
+            coll = new_coll ;
+        } else {
+            stop( "incompatible type at index %d : %s, was collecting : %s",
+                (i+1), get_single_class(current), get_single_class(coll->get()) ) ;
+        }
+        k += n_current ;
+    }
+
+    RObject out = coll->get() ;
+    delete coll ;
+    return out ;
 }
 
